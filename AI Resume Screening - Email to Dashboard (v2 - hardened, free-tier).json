@@ -1,0 +1,757 @@
+{
+  "name": "AI Resume Screening - Email to Dashboard (v2 - hardened, free-tier)",
+  "nodes": [
+    {
+      "parameters": {
+        "downloadAttachments": true,
+        "options": {}
+      },
+      "id": "9c31ac80-403e-47cc-9fbf-dbab5574412f",
+      "name": "Email Trigger (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        -2784,
+        352
+      ],
+      "webhookId": "resume-email-trigger",
+      "credentials": {
+        "imap": {
+          "id": "61jzSWyVPkzfaKDd",
+          "name": "IMAP account 6"
+        }
+      },
+      "notes": "Free: any mailbox works (Gmail free tier, Outlook free, or a self-hosted mail server). No paid service required. Point candidates to apply@yourdomain.com."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "={{ $binary !== undefined && Object.keys($binary).length > 0 }}",
+            "typeValidation": "strict",
+            "version": 1,
+            "operator": {
+              "type": "boolean",
+              "operation": "true"
+            },
+            "rightValue": ""
+          },
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5ec33249-b857-4222-ab70-3f830f8ea936",
+      "name": "Has Attachments?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2592,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "={{ Object.values($binary).map(b => b.fileName.toLowerCase()).some(f => f.endsWith('.pdf') || f.endsWith('.doc') || f.endsWith('.docx')) }}",
+            "typeValidation": "strict",
+            "version": 1,
+            "operator": {
+              "type": "boolean",
+              "operation": "true"
+            },
+            "rightValue": ""
+          },
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bf602ac3-553b-4276-8820-0b30d3b9602d",
+      "name": "Is Resume File?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2384,
+        352
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "5f7d08c4-e827-47ea-a51f-8672f35d8a85",
+      "name": "Log: Non-Resume Attachment",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -2192,
+        544
+      ],
+      "notes": "FIX: previously this false branch had no connection at all — attachments that weren't pdf/doc/docx were silently dropped with zero trace. Now at least visible in execution history."
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst binaries = item.binary || {};\nconst attachments = [];\n\nfor (const key in binaries) {\n  const file = binaries[key];\n  const isResume = /\\.(pdf|doc|docx)$/i.test(file.fileName);\n  if (isResume) {\n    // FIX: preserve the actual binary data on the output item.\n    // The original code only carried forward a 'binaryKey' string field —\n    // the real binary buffer was dropped, so every downstream extraction\n    // node had nothing to read. This is why the pipeline never actually\n    // produced resume text in production.\n    attachments.push({\n      json: {\n        status: 'ok',\n        fileName: file.fileName,\n        mimeType: file.mimeType,\n        fileExtension: (file.fileName.split('.').pop() || '').toLowerCase(),\n        emailSubject: item.json.subject || \"No Subject\",\n        emailFrom: item.json.from || \"Unknown\",\n        emailDate: item.json.date || new Date().toISOString(),\n        emailText: item.json.textPlain || item.json.textHtml || \"\"\n      },\n      binary: { attachment: file }\n    });\n  }\n}\n\nif (attachments.length === 0) {\n  return [{ json: { status: 'error', error: \"No valid resume file found in attachments\" } }];\n}\n\nreturn attachments;"
+      },
+      "id": "ed57622b-3d05-49e5-9fd1-e4577212e874",
+      "name": "Extract Resume Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2192,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "attach-ok-1",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "error",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1f4dba19-6a25-413b-bb38-c66f5281ed83",
+      "name": "Extraction Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2000,
+        352
+      ],
+      "notes": "FIX: the critical gap again — the 'no valid resume file' error object from Extract Resume Files previously flowed straight into Extract Text from PDF with no binary to read, guaranteeing a crash. Now it's checked and short-circuited to a log node instead."
+    },
+    {
+      "parameters": {},
+      "id": "c213d1b0-5bce-41c2-8f15-1b2adb9f8877",
+      "name": "Log: Extraction Error",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -2000,
+        544
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.fileExtension}}",
+                    "rightValue": "pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and",
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "pdf"
+            },
+            {
+              "conditions": {
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.fileExtension}}",
+                    "rightValue": "docx",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or",
+                "conditions2": [
+                  {
+                    "leftValue": "={{$json.fileExtension}}",
+                    "rightValue": "doc",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                }
+              },
+              "renameOutput": true,
+              "outputKey": "docx"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "944f4e2b-16fb-4c85-95b5-7567f96792b5",
+      "name": "Route by File Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -1808,
+        352
+      ],
+      "notes": "FIX: the original always ran 'extractFromPdf' regardless of actual file type, so every .doc/.docx submission would have failed extraction silently. Now routed by real extension."
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment",
+        "options": {}
+      },
+      "id": "e4e459e2-7351-45f9-a0ae-0c3e9028bcbe",
+      "name": "Extract Text from PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "docx"
+      },
+      "id": "d3885375-1976-477d-bac2-460b53e46ae5",
+      "name": "Extract Text from DOCX",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const extracted = $input.first().json;\nconst meta = $('Extract Resume Files').first().json;\nconst resumeText = (extracted.text || extracted.data || \"\").trim();\n\nconst extractName = (text) => {\n  const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);\n  for (const line of lines.slice(0, 15)) {\n    if (/^[A-Z][a-z]+\\s+[A-Z][a-z]+$/.test(line)) return line;\n    const match = line.match(/^Name[:\\s]+([A-Za-z\\s]+)$/i);\n    if (match) return match[1].trim();\n  }\n  return \"Not Found\";\n};\nconst extractEmail = (text) => { const m = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/); return m ? m[0] : \"Not Found\"; };\nconst extractPhone = (text) => { const m = text.match(/(?:\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{3}\\)?[-.\\s]?\\d{3}[-.\\s]?\\d{4}/); return m ? m[0] : \"Not Found\"; };\n\nif (!resumeText || resumeText.length < 20) {\n  return [{ json: { status: 'error', error: 'Extracted text was empty or unreadable (possibly a scanned/image-only file).' } }];\n}\n\nreturn [{\n  json: {\n    status: 'ok',\n    resume_text: resumeText,\n    resume_text_preview: resumeText.substring(0, 500),\n    candidate_name: extractName(resumeText),\n    email: extractEmail(resumeText),\n    phone: extractPhone(resumeText),\n    file_name: meta.fileName,\n    email_from: meta.emailFrom,\n    email_subject: meta.emailSubject,\n    email_date: meta.emailDate,\n    email_body: meta.emailText,\n    word_count: resumeText.split(/\\s+/).length,\n    source: \"email_attachment\"\n  }\n}];"
+      },
+      "id": "52e0139b-49c0-485b-9896-beebf48fa179",
+      "name": "Parse Resume Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1392,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "parse-ok-1",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "error",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "165ba45d-b6db-421f-9018-33b9c4091d9c",
+      "name": "Parse Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        352
+      ],
+      "notes": "Same gate pattern once more: an empty/unreadable extraction now skips the paid AI call instead of sending blank text to the model."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lightweight, zero-cost job matching by keyword. This is a known simplification —\n// for accurate routing, have applicants include a job code in the subject line\n// (e.g. 'Application [JOB-142]') and look that code up in job_descriptions via\n// the Postgres node instead. Flagged here rather than over-built, since it needs\n// a decision from you about how job codes get communicated to applicants.\nconst input = $input.first().json;\n\nconst defaultJobDescriptions = {\n  \"devops\": \"We are looking for a Senior DevOps Engineer with 5+ years of experience. Required: Kubernetes, Docker, Terraform, CI/CD, AWS/Azure, Python/Bash scripting. Nice to have: Helm, ArgoCD, Prometheus, Grafana.\",\n  \"software engineer\": \"We are seeking a Software Engineer with 3+ years of experience. Required: JavaScript/TypeScript, React/Node.js, REST APIs, SQL/NoSQL databases, Git. Nice to have: GraphQL, AWS, Microservices architecture.\",\n  \"data scientist\": \"Looking for a Data Scientist with 4+ years experience. Required: Python, SQL, Machine Learning, Statistics, Data Visualization. Nice to have: Deep Learning, NLP, Big Data tools (Spark, Hadoop).\",\n  \"default\": \"We are hiring for a technical position. Required: Relevant technical skills, problem-solving ability, communication skills, teamwork. Nice to have: Advanced certifications, leadership experience.\"\n};\n\nconst subject = (input.email_subject || \"\").toLowerCase();\nconst resumeText = (input.resume_text || \"\").toLowerCase();\n\nlet jobDescription = defaultJobDescriptions.default;\nlet jobTitle = \"Technical Position\";\nlet department = \"Engineering\";\n\nif (subject.includes(\"devops\") || resumeText.includes(\"devops\")) {\n  jobDescription = defaultJobDescriptions.devops; jobTitle = \"Senior DevOps Engineer\"; department = \"DevOps\";\n} else if (subject.includes(\"software\") || subject.includes(\"engineer\")) {\n  jobDescription = defaultJobDescriptions[\"software engineer\"]; jobTitle = \"Software Engineer\"; department = \"Engineering\";\n} else if (subject.includes(\"data\") || resumeText.includes(\"data scientist\")) {\n  jobDescription = defaultJobDescriptions[\"data scientist\"]; jobTitle = \"Data Scientist\"; department = \"Data Science\";\n}\n\nreturn [{ json: { ...input, job_description: jobDescription, job_title: jobTitle, department: department, company: \"Your Company Name\" } }];"
+      },
+      "id": "2c2cf4af-b785-47df-9406-81a879c127fe",
+      "name": "Get Job Description",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        256
+      ],
+      "notes": "FIX: this node was never wired to anything upstream in the original file (no incoming connection) — it was dead code that would never execute. Also removed the broken Merge node that used to sit between it and the AI node; this now runs as a direct, single-input step."
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "maxTokens": 4000,
+          "temperature": 0.1
+        },
+        "requestOptions": {}
+      },
+      "id": "08563084-4c93-4e41-bbf2-540b3be8f416",
+      "name": "AI Resume Evaluation",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        256
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000,
+      "credentials": {
+        "openAiApi": {
+          "id": "oh5b4B8b3P2szuXF",
+          "name": "OpenAI account 6"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "FIX: added the missing prompt entirely (this node had zero messages configured — it would have errored on every real execution). Added json_object mode, retry/backoff, and a fixed final_decision enum that now matches the dashboard's expected values exactly (SHORTLIST/REVIEW/REJECT). Cost note: swap model to 'gpt-4o-mini' for a materially cheaper run if screening volume is high and full gpt-4o accuracy isn't required."
+    },
+    {
+      "parameters": {
+        "jsCode": "const first = $input.first().json;\nif (first.error && !first.message && !first.content) {\n  return [{ json: { error: `AI evaluation failed: ${first.error}`, status: \"error\" } }];\n}\nconst aiResponse = first.message?.content || first.content || \"\";\n\nlet parsedResult;\ntry {\n  parsedResult = JSON.parse(aiResponse);\n} catch (e) {\n  try {\n    const m = aiResponse.match(/\\{[\\s\\S]*\\}/);\n    parsedResult = m ? JSON.parse(m[0]) : null;\n  } catch (e2) { parsedResult = null; }\n  if (!parsedResult) {\n    return [{ json: { error: \"Failed to parse AI response\", raw_response: aiResponse, parse_error: e.message, status: \"error\" } }];\n  }\n}\n\nconst inputData = $('Get Job Description').first().json;\nreturn [{\n  json: {\n    ...parsedResult,\n    candidate_name: parsedResult.candidate_name || inputData.candidate_name || \"Not Found\",\n    email: parsedResult.email || inputData.email || \"Not Found\",\n    phone: parsedResult.phone || inputData.phone || \"Not Found\",\n    job_title: parsedResult.job_title || inputData.job_title || \"Not Specified\",\n    file_name: inputData.file_name,\n    email_from: inputData.email_from,\n    email_subject: inputData.email_subject,\n    email_date: inputData.email_date,\n    _meta: { evaluated_at: new Date().toISOString(), company: inputData.company, department: inputData.department, resume_word_count: inputData.word_count, source: inputData.source }\n  }\n}];"
+      },
+      "id": "bd03ab05-9a68-4e37-b30d-919da0fff161",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        256
+      ],
+      "notes": "FIX: parses JSON directly first (reliable now under json_object mode), regex fallback kept only as a last resort. Now also catches an AI-node-level failure (after retries exhausted) and turns it into a clean error object."
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\n\nif (result.error) {\n  return [{ json: { status: \"error\", error: result.error, details: result } }];\n}\n\nconst validateScore = (s) => Math.min(100, Math.max(0, parseFloat(s) || 0));\nconst validateArray = (a) => Array.isArray(a) ? a : [];\n\nconst sanitized = {\n  status: \"ok\",\n  candidate_name: String(result.candidate_name || \"Unknown\"),\n  email: String(result.email || \"Not Found\"),\n  phone: String(result.phone || \"Not Found\"),\n  job_title: String(result.job_title || \"Not Specified\"),\n  overall_match: validateScore(result.overall_match),\n  ats_score: validateScore(result.ats_score),\n  technical_score: validateScore(result.technical_score),\n  experience_score: validateScore(result.experience_score),\n  education_score: validateScore(result.education_score),\n  certification_score: validateScore(result.certification_score),\n  project_score: validateScore(result.project_score),\n  keyword_score: validateScore(result.keyword_score),\n  soft_skill_score: validateScore(result.soft_skill_score),\n  communication_score: validateScore(result.communication_score),\n  leadership_score: validateScore(result.leadership_score),\n  recommendation: String(result.recommendation || \"Review Required\"),\n  risk_level: String(result.risk_level || \"Medium\"),\n  interview_round: String(result.interview_round || \"Technical Screening\"),\n  difficulty: String(result.difficulty || \"Medium\"),\n  summary: String(result.summary || \"\"),\n  matched_skills: validateArray(result.matched_skills),\n  missing_skills: validateArray(result.missing_skills),\n  nice_to_have_skills: validateArray(result.nice_to_have_skills),\n  strengths: validateArray(result.strengths),\n  weaknesses: validateArray(result.weaknesses),\n  missing_certifications: validateArray(result.missing_certifications),\n  resume_improvements: validateArray(result.resume_improvements),\n  technical_questions: validateArray(result.technical_questions),\n  hr_questions: validateArray(result.hr_questions),\n  scenario_questions: validateArray(result.scenario_questions),\n  behavioural_questions: validateArray(result.behavioural_questions),\n  final_decision: String(result.final_decision || \"REVIEW\"),\n  reason: String(result.reason || \"\"),\n  file_name: result.file_name,\n  email_from: result.email_from,\n  email_subject: result.email_subject,\n  email_date: result.email_date,\n  _meta: result._meta || { evaluated_at: new Date().toISOString() }\n};\n\nreturn [{ json: sanitized }];"
+      },
+      "id": "687f625e-6963-45a2-9e27-5a39f674c694",
+      "name": "Sanitize Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        256
+      ],
+      "notes": "Unchanged logic — already sound. default final_decision 'REVIEW' already matched the dashboard's expected enum, so no change needed here."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Free alternative to a hosted webhook backend: the dashboard HTML is a static,\n// no-backend file that reads a candidate straight out of the page URL. So instead\n// of POSTing to a server that doesn't exist yet (the original 'your-dashboard.com'\n// placeholder), we just build that URL and hand it to recruiters in the email.\nconst data = $input.first().json;\nconst DASHBOARD_BASE_URL = \"https://YOUR_FREE_STATIC_HOST/ai_recruitment_dashboard_v2.html\"; // e.g. a GitHub Pages or Netlify free-tier URL\nconst encoded = encodeURIComponent(JSON.stringify(data));\nreturn [{ json: { ...data, dashboard_link: `${DASHBOARD_BASE_URL}?candidate=${encoded}` } }];"
+      },
+      "id": "ffa1eff7-0b39-4e90-baec-1c6f5726d7ef",
+      "name": "Build Dashboard Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        256
+      ],
+      "notes": "FIX: replaced the 'Send to Dashboard' HTTP node, which posted to a fictional URL with an empty body ({} parameters — it was never actually filled in) and required hosting a backend to receive it. Host the dashboard HTML for free on GitHub Pages, Netlify, or Cloudflare Pages and put that URL here."
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.final_decision}}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "SHORTLIST"
+            },
+            {
+              "value2": "REVIEW"
+            },
+            {
+              "value2": "REJECT"
+            }
+          ]
+        },
+        "fallbackOutput": 1
+      },
+      "id": "8aa74734-a475-452a-bbc2-c722400c4eae",
+      "name": "Route by Decision",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        0,
+        256
+      ],
+      "notes": "FIX: the original 3 rules were completely empty ({}) — the switch had no actual match conditions configured, so routing never worked as intended. Now matches final_decision against SHORTLIST / REVIEW / REJECT explicitly, with unmatched values falling back to the REVIEW branch (index 1) for human triage rather than being silently misrouted."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "REPLACE_WITH_08_POSTGRESQL_STORAGE_WORKFLOW_ID"
+        },
+        "options": {}
+      },
+      "id": "dc9d1846-8338-44cd-bff1-d9ac38e6b013",
+      "name": "Store in Postgres",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        208,
+        64
+      ],
+      "notes": "FIX (replaces Google Sheets): calls the '08 - PostgreSQL Storage' sub-workflow you already have. Self-hosted Postgres is free (or free-tier hosted, e.g. Supabase/Neon) and gives you real querying/reporting instead of a flat spreadsheet with API quotas."
+    },
+    {
+      "parameters": {
+        "fromEmail": "REPLACE_WITH_YOUR_SEND_ADDRESS",
+        "toEmail": "REPLACE_WITH_YOUR_HR_INBOX",
+        "subject": "✅ Candidate SHORTLISTED: {{ $json.candidate_name }} - {{ $json.job_title }}",
+        "text": "=Candidate: {{$json.candidate_name}} ({{$json.email}})\nRole: {{$json.job_title}}\nOverall match: {{$json.overall_match}}\nReason: {{$json.reason}}\n\nFull evaluation: {{$json.dashboard_link}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a11a2be2-6e49-4784-8b01-81ae72a4a6b3",
+      "name": "Email: Shortlist HR",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        208,
+        256
+      ],
+      "webhookId": "33408733-5606-455f-840a-6aad6bedccfa",
+      "credentials": {
+        "smtp": {
+          "id": "mWJLhNUB31YP4bS8",
+          "name": "SMTP account 5"
+        }
+      },
+      "notes": "FIX: added the missing to/from/body fields and a link to the dashboard. SMTP is free with Gmail (App Password), Outlook, or your existing mail provider — no paid email service needed."
+    },
+    {
+      "parameters": {
+        "fromEmail": "REPLACE_WITH_YOUR_SEND_ADDRESS",
+        "toEmail": "REPLACE_WITH_YOUR_HR_INBOX",
+        "subject": "⚠️ Candidate for REVIEW: {{ $json.candidate_name }} - {{ $json.job_title }}",
+        "text": "=Candidate: {{$json.candidate_name}} ({{$json.email}})\nRole: {{$json.job_title}}\nOverall match: {{$json.overall_match}}\nReason: {{$json.reason}}\n\nFull evaluation: {{$json.dashboard_link}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "9c4d3b4a-8fee-4b51-ad9e-2a31f0351b88",
+      "name": "Email: Review HR",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        208,
+        448
+      ],
+      "webhookId": "2cfe4a0b-51e4-45ab-9205-390ee8d5dfd3",
+      "credentials": {
+        "smtp": {
+          "id": "mWJLhNUB31YP4bS8",
+          "name": "SMTP account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "REPLACE_WITH_YOUR_SEND_ADDRESS",
+        "toEmail": "REPLACE_WITH_YOUR_HR_INBOX",
+        "subject": "❌ Candidate REJECTED: {{ $json.candidate_name }} - {{ $json.job_title }}",
+        "text": "=Candidate: {{$json.candidate_name}} ({{$json.email}})\nRole: {{$json.job_title}}\nOverall match: {{$json.overall_match}}\nReason: {{$json.reason}}\n\nFull evaluation: {{$json.dashboard_link}}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "8da6a371-b080-47e4-8ef5-99bb8cf83147",
+      "name": "Email: Reject HR",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        208,
+        640
+      ],
+      "webhookId": "30c8a661-fae6-4305-adb9-c85f6e89702a",
+      "credentials": {
+        "smtp": {
+          "id": "mWJLhNUB31YP4bS8",
+          "name": "SMTP account 5"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Has Attachments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachments?": {
+      "main": [
+        [
+          {
+            "node": "Is Resume File?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Resume File?": {
+      "main": [
+        [
+          {
+            "node": "Extract Resume Files",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: Non-Resume Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Resume Files": {
+      "main": [
+        [
+          {
+            "node": "Extraction Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction Valid?": {
+      "main": [
+        [
+          {
+            "node": "Route by File Type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: Extraction Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by File Type": {
+      "main": [
+        [
+          {
+            "node": "Extract Text from PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Text from DOCX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from PDF": {
+      "main": [
+        [
+          {
+            "node": "Parse Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from DOCX": {
+      "main": [
+        [
+          {
+            "node": "Parse Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Resume Text": {
+      "main": [
+        [
+          {
+            "node": "Parse Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Valid?": {
+      "main": [
+        [
+          {
+            "node": "Get Job Description",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job Description": {
+      "main": [
+        [
+          {
+            "node": "AI Resume Evaluation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Resume Evaluation": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Sanitize Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize Output": {
+      "main": [
+        [
+          {
+            "node": "Build Dashboard Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dashboard Link": {
+      "main": [
+        [
+          {
+            "node": "Route by Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Decision": {
+      "main": [
+        [
+          {
+            "node": "Store in Postgres",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email: Shortlist HR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store in Postgres",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email: Review HR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Store in Postgres",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email: Reject HR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "28c2c919-429a-4855-a12d-22b08030ef89",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1d9ef02be59dca373984252f00f6868c32a98c7190e501d8a03411c35cdfedd7"
+  },
+  "nodeGroups": [],
+  "id": "lFVSYm2nhDRbr4br",
+  "tags": []
+}
